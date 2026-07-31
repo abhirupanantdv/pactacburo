@@ -1,15 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { DesktopGrid } from './components/DesktopGrid';
 import { Dock } from './components/Dock';
 import { WidgetsPanel } from './components/WidgetsPanel';
 import { ModuleWindow } from './components/ModuleWindow';
 import { CommandCenter } from './components/CommandCenter';
 import { StickyNotes } from './components/StickyNotes';
+import { LoginPage } from './components/LoginPage';
 import type { StickyNote } from './components/StickyNotes';
-import { Search, Bell, Battery, Wifi } from 'lucide-react';
-import type { ERPRecord } from './services/erpnext';
+import { Search, LogOut, LoaderCircle } from 'lucide-react';
+import { getCurrentUser, logout } from './services/erpnext';
+import type { ERPRecord, ERPUser } from './services/erpnext';
 
 function App() {
+  const [currentUser, setCurrentUser] = useState<ERPUser | null>(null);
+  const [authChecking, setAuthChecking] = useState(true);
   const [openModules, setOpenModules] = useState<string[]>([]);
   const [activeModuleId, setActiveModuleId] = useState<string | null>(null);
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
@@ -18,11 +22,15 @@ function App() {
   // Sticky Notes State
   const [stickyNotes, setStickyNotes] = useState<StickyNote[]>(() => {
     const saved = localStorage.getItem('desk_sticky_notes');
-    return saved ? JSON.parse(saved) : [
-      { id: '1', text: 'Welcome to DeskOS! Memos are auto-saved locally.', color: '#ffeada', x: 200, y: 150 },
-      { id: '2', text: 'Task: Synchronize Sales Order invoices with ERPNext.', color: '#fffbeb', x: 420, y: 130 }
-    ];
+    return saved ? JSON.parse(saved) : [];
   });
+
+  useEffect(() => {
+    getCurrentUser()
+      .then(setCurrentUser)
+      .catch(() => setCurrentUser(null))
+      .finally(() => setAuthChecking(false));
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('desk_sticky_notes', JSON.stringify(stickyNotes));
@@ -91,32 +99,58 @@ function App() {
     setActiveModuleId(null);
   };
 
+  const handleAuthenticationError = useCallback(() => {
+    setCurrentUser(null);
+  }, []);
+
+  const handleLogout = async () => {
+    await logout().catch(() => undefined);
+    setCurrentUser(null);
+    setOpenModules([]);
+    setActiveModuleId(null);
+    setSelectedRecordId(null);
+  };
+
+  if (authChecking) {
+    return (
+      <div className="auth-loading">
+        <LoaderCircle className="animate-spin" size={30} />
+        <span>Checking ERPNext session...</span>
+      </div>
+    );
+  }
+
+  if (!currentUser) return <LoginPage onLogin={setCurrentUser} />;
+
+  const initials = currentUser.fullName
+    .split(/\s+/)
+    .slice(0, 2)
+    .map(part => part[0])
+    .join('')
+    .toUpperCase();
+
   return (
     <div style={styles.appContainer}>
       
       {/* OS Top Menu Bar */}
       <header style={styles.menuBar} className="glass">
         <div style={styles.menuBarLeft}>
-          <span style={styles.logoText}>DeskOS</span>
-          <span style={styles.logoSubtitle}>Pacific Tactical ERP</span>
+          <span style={styles.logoText}>Pactac ERP</span>
+          <span style={styles.logoSubtitle}>Live ERPNext</span>
         </div>
 
         {/* Global Search Bar (Trigger) */}
         <div style={styles.searchBar} onClick={() => setSearchOpen(true)}>
           <Search size={14} color="var(--text-muted)" />
-          <span style={styles.searchText}>Search transactions... (⌘K)</span>
+          <span style={styles.searchText}>Search live transactions... (Ctrl+K)</span>
         </div>
 
         <div style={styles.menuBarRight}>
-          <div style={styles.indicatorGroup}>
-            <Wifi size={14} color="#10b981" />
-            <Battery size={14} color="var(--text-muted)" />
-            <div style={styles.notifBadge}>
-              <Bell size={14} color="var(--text-primary)" />
-              <span style={styles.notifDot}>3</span>
-            </div>
-          </div>
-          <div style={styles.avatar}>PM</div>
+          <span style={styles.userLabel}>{currentUser.fullName}</span>
+          <div style={styles.avatar}>{initials || 'U'}</div>
+          <button style={styles.logoutBtn} onClick={() => void handleLogout()} title="Sign out of ERPNext">
+            <LogOut size={14} />
+          </button>
         </div>
       </header>
 
@@ -142,17 +176,19 @@ function App() {
 
         {/* Right Side: Widgets Sidebar */}
         <div style={styles.widgetSidebar}>
-          <WidgetsPanel />
+          <WidgetsPanel user={currentUser} onAuthenticationError={handleAuthenticationError} />
         </div>
       </main>
 
       {/* Floating active module viewport (Window overlay) - Render outside main padding */}
       {activeModuleId && (
         <ModuleWindow
+          key={activeModuleId}
           moduleId={activeModuleId}
           onClose={() => handleCloseModule(activeModuleId)}
           selectedRecordId={selectedRecordId}
           onSelectRecord={setSelectedRecordId}
+          onAuthenticationError={handleAuthenticationError}
         />
       )}
 
@@ -280,6 +316,25 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    cursor: 'pointer'
+  },
+  userLabel: {
+    fontSize: '0.72rem',
+    color: 'var(--text-secondary)',
+    maxWidth: '140px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap'
+  },
+  logoutBtn: {
+    width: '28px',
+    height: '28px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: '6px',
+    color: 'var(--text-secondary)',
+    backgroundColor: 'rgba(15, 23, 42, 0.05)',
     cursor: 'pointer'
   },
   desktopSpace: {

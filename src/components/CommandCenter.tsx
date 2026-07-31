@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, CornerDownLeft, Command, X, FileText } from 'lucide-react';
 import { searchAllRecords } from '../services/erpnext';
+import { moduleDefinitions } from '../services/erpnext';
 import type { ERPRecord } from '../services/erpnext';
 
 interface CommandCenterProps {
@@ -19,18 +20,16 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<{ moduleId: string; moduleName: string; record: ERPRecord }[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [searchError, setSearchError] = useState('');
+  const [searching, setSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Available direct module launch shortcuts
-  const modulesList = [
-    { id: 'sales', name: 'Sales Dashboard' },
-    { id: 'accounting', name: 'Accounting Ledger' },
-    { id: 'project', name: 'Project Workspace' },
-    { id: 'inventory', name: 'Inventory & Stock' },
-    { id: 'employees', name: 'Employee Profiles' },
-    { id: 'todo', name: 'To-do Checklist' }
-  ];
+  const modulesList = Object.values(moduleDefinitions).map(module => ({
+    id: module.id,
+    name: module.name
+  }));
 
   const filteredModules = modulesList.filter(m => 
     m.name.toLowerCase().includes(query.toLowerCase())
@@ -45,18 +44,34 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
   }, [isOpen]);
 
   useEffect(() => {
+    let active = true;
     const performSearch = async () => {
       if (!query.trim()) {
         setResults([]);
+        setSearchError('');
         return;
       }
-      const searchRes = await searchAllRecords(query);
-      setResults(searchRes);
-      setSelectedIndex(0);
+      setSearching(true);
+      setSearchError('');
+      try {
+        const searchRes = await searchAllRecords(query);
+        if (!active) return;
+        setResults(searchRes);
+        setSelectedIndex(0);
+      } catch (reason) {
+        if (!active) return;
+        setResults([]);
+        setSearchError(reason instanceof Error ? reason.message : 'ERPNext search failed.');
+      } finally {
+        if (active) setSearching(false);
+      }
     };
 
     const delayDebounce = setTimeout(performSearch, 150);
-    return () => clearTimeout(delayDebounce);
+    return () => {
+      active = false;
+      clearTimeout(delayDebounce);
+    };
   }, [query]);
 
   useEffect(() => {
@@ -68,33 +83,35 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
       if (e.key === 'Escape') {
         onClose();
       } else if (e.key === 'ArrowDown') {
+        if (totalItems === 0) return;
         e.preventDefault();
         setSelectedIndex(prev => (prev + 1) % totalItems);
       } else if (e.key === 'ArrowUp') {
+        if (totalItems === 0) return;
         e.preventDefault();
         setSelectedIndex(prev => (prev - 1 + totalItems) % totalItems);
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        handleSelectCurrent();
+        const totalModules = filteredModules.length;
+        if (selectedIndex < totalModules) {
+          const module = filteredModules[selectedIndex];
+          if (module) {
+            onSelectModule(module.id);
+            onClose();
+          }
+        } else {
+          const match = results[selectedIndex - totalModules];
+          if (match) {
+            onSelectRecord(match.moduleId, match.record);
+            onClose();
+          }
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, selectedIndex, filteredModules, results]);
-
-  const handleSelectCurrent = () => {
-    const totalModules = filteredModules.length;
-    if (selectedIndex < totalModules) {
-      onSelectModule(filteredModules[selectedIndex].id);
-      onClose();
-    } else {
-      const resultIndex = selectedIndex - totalModules;
-      const match = results[resultIndex];
-      onSelectRecord(match.moduleId, match.record);
-      onClose();
-    }
-  };
+  }, [filteredModules, isOpen, onClose, onSelectModule, onSelectRecord, results, selectedIndex]);
 
   if (!isOpen) return null;
 
@@ -197,7 +214,15 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
             </div>
           )}
 
-          {filteredModules.length === 0 && results.length === 0 && (
+          {searching && (
+            <div style={styles.noResults}>Searching live ERPNext records...</div>
+          )}
+
+          {searchError && (
+            <div style={{ ...styles.noResults, color: '#fca5a5' }}>{searchError}</div>
+          )}
+
+          {!searching && !searchError && filteredModules.length === 0 && results.length === 0 && (
             <div style={styles.noResults}>
               No matching ERP transactions, modules, or tools found.
             </div>
